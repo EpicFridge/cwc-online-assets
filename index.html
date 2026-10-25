@@ -1210,7 +1210,6 @@ function updateLocal(dt) {
     me.vy = Math.max(me.vy - GRAV * h, -40);
     p.y += me.vy * h; resolveY(p);
   }
-  carContacts(p);
   if (p.y < -30) { p.set(0, 1, 8); me.vy = 0; }
   me.target.copy(p);
   // network
@@ -1220,27 +1219,46 @@ function updateLocal(dt) {
     send({ t: "s", x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3) });
   }
 }
-function carContacts(p) {
+// Extras that only WATCH the cars (no pushing, no effect on driving or getting in):
+//  - a moving car driven by someone else hits you -> you get flung + hit sound
+//  - your car hits another car fast -> ask the server to blow both up
+function carExtras() {
+  if (!me) return;
   const now = performance.now();
-  for (const c of cars.values()) {
-    if (p.y > c.y + 1.45 || p.y + BODY_H < c.y) continue;
-    const sh = Math.sin(c.h), ch = Math.cos(c.h);
-    const dx = p.x - c.x, dz = p.z - c.z;
-    let f = dx * sh + dz * ch, r = dx * ch - dz * sh;              // position in the car's own frame
-    const HL = 2.1 + RADIUS, HW = 1.0 + RADIUS;
-    if (Math.abs(f) >= HL || Math.abs(r) >= HW) continue;
-    if (c.driver && c.driver !== myId && Math.abs(c.v) > 4 && (!me.hitT || now - me.hitT > 700)) {   // run over!
+  if (!me.carId) {
+    const p = me.pos;
+    for (const c of cars.values()) {
+      if (!c.driver || c.driver === myId || Math.abs(c.v) <= 4) continue;
+      if (p.y > c.y + 1.45 || p.y + BODY_H < c.y) continue;
+      const sh = Math.sin(c.h), ch = Math.cos(c.h), dx = p.x - c.x, dz = p.z - c.z;
+      const f = dx * sh + dz * ch, r = dx * ch - dz * sh;
+      if (Math.abs(f) >= 2.45 || Math.abs(r) >= 1.35) continue;
+      if (me.hitT && now - me.hitT < 700) continue;
       me.hitT = now;
       const sp = Math.min(30, Math.abs(c.v) * 0.9), sg = c.v >= 0 ? 1 : -1, side = r >= 0 ? 1 : -1;
       me.kbx += (sh * sg * 0.8 + ch * side * 0.6) * sp;
       me.kbz += (ch * sg * 0.8 - sh * side * 0.6) * sp;
       me.vy = Math.max(me.vy, Math.min(15, 5 + Math.abs(c.v) * 0.3));
-      cancelHoldEmote();
       playSfx("hit");
       send({ t: "hit" });
     }
-    if (HL - Math.abs(f) < HW - Math.abs(r)) f = Math.sign(f || 1) * HL; else r = Math.sign(r || 1) * HW;   // push out the short way
-    p.x = c.x + f * sh + r * ch; p.z = c.z + f * ch - r * sh;
+    return;
+  }
+  const c = cars.get(me.carId); if (!c) return;
+  if (me.crashT && now - me.crashT < 2000) return;
+  for (const o of cars.values()) {
+    if (o === c || o.dead || Math.abs(o.y - c.y) > 2) continue;
+    if (Math.hypot(o.x - c.x, o.z - c.z) > 4.3) continue;
+    const ofx = Math.sin(o.h), ofz = Math.cos(o.h), mfx = Math.sin(c.h), mfz = Math.cos(c.h);
+    let best = null;
+    for (const a of [-1.05, 1.05]) for (const b2 of [-1.05, 1.05]) {
+      const ddx = (c.x + mfx * a) - (o.x + ofx * b2), ddz = (c.z + mfz * a) - (o.z + ofz * b2), d = Math.hypot(ddx, ddz);
+      if (d < 2.1 && (!best || d < best.d)) best = { d, dx: ddx, dz: ddz };
+    }
+    if (!best) continue;
+    const l = best.d || 1, nx = best.dx / l, nz = best.dz / l;
+    const closing = -((mfx * c.v - ofx * (o.v || 0)) * nx + (mfz * c.v - ofz * (o.v || 0)) * nz);
+    if (closing > 18) { me.crashT = now; send({ t: "car_crash", id: o.id }); return; }
   }
 }
 /* ------------------------------------------------------------ cars */
@@ -1287,25 +1305,9 @@ function updateCar(dt) {
     c.x += Math.sin(c.h) * c.v * hh; c.z += Math.cos(c.h) * c.v * hh;
     hit = Math.max(hit, carCollide(c));
   }
-  const canBoom = !c.boomSent || performance.now() - c.boomSent > 2000;
-  for (const o of cars.values()) {                       // other cars: bump them, or both blow up on a fast hit
-    if (o === c || Math.abs(o.y - c.y) > 2) continue;
-    const ofx = Math.sin(o.h), ofz = Math.cos(o.h), mfx = Math.sin(c.h), mfz = Math.cos(c.h);
-    let best = null;
-    for (const a of [-1.05, 1.05]) for (const b2 of [-1.05, 1.05]) {
-      const ddx = (c.x + mfx * a) - (o.x + ofx * b2), ddz = (c.z + mfz * a) - (o.z + ofz * b2), d = Math.hypot(ddx, ddz);
-      if (d < 2.1 && (!best || d < best.d)) best = { d, dx: ddx, dz: ddz };
-    }
-    if (!best) continue;
-    const l = best.d || 1, nx = best.dx / l, nz = best.dz / l;
-    c.x += nx * (2.1 - best.d); c.z += nz * (2.1 - best.d);
-    const closing = -((mfx * c.v - ofx * o.v) * nx + (mfz * c.v - ofz * o.v) * nz);
-    if (closing > 18 && !o.dead && canBoom) { c.boomSent = performance.now(); send({ t: "car_crash", id: o.id }); }
-    else if (closing > 0) c.v *= 0.45;
-  }
-  if (boost && hit > 26 && canBoom) {                    // crashing hard into a wall while boosting can blow the car up
+  if (boost && hit > 26 && !c.boomSent) {                 // crashing hard while boosting can blow the car up
     const chance = Math.min(0.95, Math.max(0.3, (hit - 26) / 14));
-    if (Math.random() < chance) { c.boomSent = performance.now(); send({ t: "car_boom" }); }
+    if (Math.random() < chance) { c.boomSent = true; send({ t: "car_boom" }); }
   }
   if (hit > 6) c.v *= -0.25; else if (hit > 0) c.v *= 0.7;
   c.x = Math.max(-WORLD, Math.min(WORLD, c.x)); c.z = Math.max(-WORLD, Math.min(WORLD, c.z));
@@ -1351,7 +1353,7 @@ function applyCarMsg(m, snap) {
   if (c.driver === myId && me) {                       // I am the driver
     if (!wasMine) {
       cancelHoldEmote(); me.carId = c.id; me.vy = 0; me.kbx = me.kbz = 0;
-      c.x = c.tx = m.x; c.y = c.ty = m.y; c.z = c.tz = m.z; c.h = c.th = m.h; c.v = 0; c.vy = 0; c.lastSend = 0; c.boomSent = 0;
+      c.x = c.tx = m.x; c.y = c.ty = m.y; c.z = c.tz = m.z; c.h = c.th = m.h; c.v = 0; c.vy = 0; c.lastSend = 0; c.boomSent = false;
     }
     return;
   }
@@ -1397,11 +1399,7 @@ function interact() {
     send({ t: "car_exit" });
     return;
   }
-  if (me.holdId) {
-    const nc = nearestFreeCar();
-    if (nc && Math.hypot(nc.x - me.pos.x, nc.z - me.pos.z) < 3.4) { send({ t: "car_enter", id: nc.id }); return; }   // right next to a car: get in
-    throwBall(); return;
-  }
+  if (me.holdId) { throwBall(); return; }
   const b = nearestGrabbable(); if (b) { send({ t: "grab", id: b.id }); return; }
   const c = nearestFreeCar(); if (c) send({ t: "car_enter", id: c.id });
 }
@@ -1410,20 +1408,13 @@ function updatePrompt() {
   let txt = "";
   if (me && !typing) {
     if (me.carId) txt = TOUCH ? "Tap E to exit the car" : "E - Exit car   (W/S drive · A/D steer · SPACE brake · SHIFT turbo — crash hard on turbo and it might blow up!)";
-    else if (me.holdId && nearestFreeCar() && Math.hypot(nearestFreeCar().x - me.pos.x, nearestFreeCar().z - me.pos.z) < 3.4) {
-      txt = TOUCH ? "Tap E to drive (you'll put down what you're holding)" : "E - Drive car (puts down what you're holding)";
-    } else if (me.holdId) {
+    else if (me.holdId) {
       const hk = (balls.get(me.holdId) || {}).kind;
-      if (hk === "basket") txt = TOUCH ? "Tap E to throw (face a hoop to shoot)" : "E - Throw ball (face a hoop to shoot) | Q - Drop";
-      else if (hk === "abomb") txt = TOUCH ? "Tap E to throw a bomb (you keep the admin bomb)" : "E - Throw a bomb where you look (hold E to spam) | Q - Drop";
-      else txt = TOUCH ? "Tap E to throw the bomb" : "E - Throw bomb where you look | Q - Drop";
-    } else {
-      const gb = nearestGrabbable();
-      if (gb) txt = (TOUCH ? "Tap E to grab the " : "E - Grab ") + (gb.kind === "basket" ? "ball" : gb.kind === "abomb" ? "admin bomb" : "bomb");
+      txt = hk === "basket" ? (TOUCH ? "Tap E to throw (face a hoop to shoot)" : "E - Throw ball (face a hoop to shoot) | Q - Drop")
+                            : (TOUCH ? "Tap E to throw the bomb" : "E - Throw bomb where you look | Q - Drop");
     }
-    if (!txt && !me.carId && !me.holdId && nearestFreeCar()) txt = TOUCH ? "Tap E to drive" : "E - Drive car";
-    if (txt) { if (el.textContent !== txt) el.textContent = txt; el.style.display = "block"; } else el.style.display = "none";
-    return;
+    else if (nearestGrabbable()) txt = TOUCH ? "Tap E to grab the ball" : "E - Grab ball";
+    else if (nearestFreeCar()) txt = TOUCH ? "Tap E to drive" : "E - Drive car";
   }
   if (txt) { if (el.textContent !== txt) el.textContent = txt; el.style.display = "block"; } else el.style.display = "none";
 }
@@ -1930,6 +1921,7 @@ function frameInner(now) {
     return;
   }
   updateLocal(dt);
+  try { carExtras(); } catch (err) { console.error("carExtras", err); }
   for (const pl of players.values()) if (!pl.isMe) updateRemote(pl, dt);
   me.pos.copy(me.target);
   updateCamera(dt);

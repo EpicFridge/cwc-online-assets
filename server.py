@@ -783,19 +783,12 @@ def jelly_spot():
 JELLIES = [jelly_spot() for _ in range(JELLY_COUNT)]
 
 
-# ================================================================ PHYSICS (balls, bombs, cars) - server authoritative
+# ================================================================ PHYSICS (balls) - server authoritative
 G = 22.0
 BALLS = []
 CARS = []
 SCORE = [0, 0]   # [pink, mint]
 _spawn_n = 0
-BOMB_FUSE = 3.5          # a thrown bomb goes off when it hits something, or after this many seconds
-BOMB_SPEED = 16.0
-BLAST_R = 9.0            # balls get pushed inside this radius
-CHAIN_R = 7.0            # other bombs inside this radius go off too
-CAR_BLAST_R = 4.5        # cars inside this radius blow up too
-MAX_BOMBS = 80
-RESTOCK = 5.0            # seconds before a bomb shop slot refills
 RIM_PTS = []     # (x, y, z, hoop index) points around every rim, balls bounce off them
 for _hi, _h in enumerate(HOOPS):
     for _k in range(20):
@@ -803,17 +796,15 @@ for _hi, _h in enumerate(HOOPS):
         RIM_PTS.append((_h["x"] + math.cos(_a) * _h["r"], _h["y"], _h["z"] + math.sin(_a) * _h["r"], _hi))
 
 
-def make_ball(bid, kind, x, y, z, spawned=False, pinned=False):
+def make_ball(bid, kind, x, y, z, spawned=False):
     b = {"id": bid, "kind": kind, **BALL_KINDS[kind], "hx": x, "hy": y, "hz": z, "spawned": spawned}
     reset_ball(b)
-    b["pinned"] = pinned
     return b
 
 
 def reset_ball(b):
     b.update(x=b["hx"], z=b["hz"], y=max(b["hy"], b["r"]), vx=0.0, vy=0.0, vz=0.0, asleep=True, idle=0.0,
-             respawn_at=0.0, scored=False, dirty=True, holder=None, last_basket=0.0,
-             live=False, armed_at=0.0, fuse_at=0.0, boom_at=0.0, hit=False, pinned=False)
+             respawn_at=0.0, scored=False, dirty=True, holder=None, last_basket=0.0)
 
 
 def ball_info(b):
@@ -824,27 +815,9 @@ def ball_by_id(bid):
     return next((b for b in BALLS if b["id"] == bid), None)
 
 
-def is_bomb(b):
-    return b["kind"] == "bomb"
-
-
 def car_home(c):
     d = next(d for d in CAR_DEFS if d["id"] == c["id"])
-    c.update(x=d["x"], y=0.0, z=d["z"], h=d["h"], v=0.0, driver=None, t=0.0, dead=False, respawn_at=0.0, boom_at=0.0)
-
-
-def new_id(prefix):
-    global _spawn_n
-    _spawn_n += 1
-    return f"{prefix}{_spawn_n}"
-
-
-def stock_slot(sl):
-    b = make_ball(new_id("b"), "bomb", sl["x"], sl["y"], sl["z"], pinned=True)
-    BALLS.append(b)
-    sl["ball"] = b["id"]
-    sl["empty_at"] = 0.0
-    return b
+    c.update(x=d["x"], y=0.0, z=d["z"], h=d["h"], v=0.0, driver=None, t=0.0, dead=False, respawn_at=0.0)
 
 
 def init_state():
@@ -852,12 +825,12 @@ def init_state():
     CARS.clear()
     for d in BALL_DEFS:
         BALLS.append(make_ball(d["id"], d["kind"], d["x"], d["r"], d["z"]))
-    for sl in SHOP_SLOTS:
-        stock_slot(sl)
     for d in CAR_DEFS:
         c = {"id": d["id"]}
         car_home(c)
         CARS.append(c)
+
+
 
 
 def car_public(c, **extra):
@@ -883,13 +856,13 @@ def pushers(now):
         stale = now - p["pt"] > 0.3
         vx = 0.0 if stale else p["vx"]
         vz = 0.0 if stale else p["vz"]
-        out.append((p["x"], p["y"] + 0.4, p["z"], p["x"], p["y"] + 1.4, p["z"], 0.4, vx, 0.0, vz, 70.0, p["x"], p["z"], 0.5))
+        out.append((p["x"], p["y"] + 0.4, p["z"], p["x"], p["y"] + 1.4, p["z"], 0.4, vx, 0.0, vz, 70.0))
     for c in CARS:
         if c["dead"]:
             continue
         fx, fz = math.sin(c["h"]), math.cos(c["h"])
         v = c["v"] if (c["driver"] and now - c["t"] < 0.4) else 0.0
-        out.append((c["x"] + fx, c["y"] + 0.6, c["z"] + fz, c["x"] - fx, c["y"] + 0.6, c["z"] - fz, 1.0, fx * v, 0.0, fz * v, 900.0, c["x"], c["z"], 2.1))
+        out.append((c["x"] + fx, c["y"] + 0.6, c["z"] + fz, c["x"] - fx, c["y"] + 0.6, c["z"] - fz, 1.0, fx * v, 0.0, fz * v, 900.0))
     return out
 
 
@@ -908,7 +881,7 @@ def bounce_off_point(b, px, py, pz, pr, e):
     d2 = dx * dx + dy * dy + dz * dz
     lim = r + pr
     if d2 >= lim * lim or d2 < 1e-12:
-        return False
+        return
     d = math.sqrt(d2)
     nx, ny, nz = dx / d, dy / d, dz / d
     pen = lim - d
@@ -916,7 +889,6 @@ def bounce_off_point(b, px, py, pz, pr, e):
     vn = b["vx"] * nx + b["vy"] * ny + b["vz"] * nz
     if vn < 0:
         b["vx"] -= (1 + e) * vn * nx; b["vy"] -= (1 + e) * vn * ny; b["vz"] -= (1 + e) * vn * nz
-    return True
 
 
 def step_ball(b, h, push):
@@ -932,14 +904,13 @@ def step_ball(b, h, push):
     supported = False
     if b["y"] < r:
         b["y"] = r
-        b["hit"] = True
         if b["vy"] < 0:
             b["vy"] = -b["vy"] * b["e"]
             if abs(b["vy"]) < 1.5:
                 b["vy"] = 0.0
         supported = True
-    # static boxes (only the ones near this ball)
-    for (x0, x1, y0, y1, z0, z1) in boxes_near(b["x"], b["z"]):
+    # static boxes
+    for (x0, x1, y0, y1, z0, z1) in AABBS:
         if b["x"] < x0 - r or b["x"] > x1 + r or b["y"] < y0 - r or b["y"] > y1 + r or b["z"] < z0 - r or b["z"] > z1 + r:
             continue
         cx = min(max(b["x"], x0), x1); cy = min(max(b["y"], y0), y1); cz = min(max(b["z"], z0), z1)
@@ -958,7 +929,6 @@ def step_ball(b, h, push):
             pen = m[0] + r
             nx, ny, nz = m[1], m[2], m[3]
         b["x"] += nx * pen; b["y"] += ny * pen; b["z"] += nz * pen
-        b["hit"] = True
         vn = b["vx"] * nx + b["vy"] * ny + b["vz"] * nz
         if vn < 0:
             e = 0.0 if -vn < 1.5 else b["e"]
@@ -969,20 +939,16 @@ def step_ball(b, h, push):
     for hp in HOOPS:
         if abs(b["y"] - hp["y"]) < r + 0.1 and math.hypot(b["x"] - hp["x"], b["z"] - hp["z"]) < hp["r"] + r + 0.1:
             for (px, py, pz, _hi) in RIM_PTS:
-                if bounce_off_point(b, px, py, pz, 0.05, 0.55):
-                    b["hit"] = True
+                bounce_off_point(b, px, py, pz, 0.05, 0.55)
             break
     # players / cars
-    for (ax, ay, az, bx, by, bz, rad, pvx, pvy, pvz, pm, mx, mz, reach) in push:
-        if abs(b["x"] - mx) > reach + r or abs(b["z"] - mz) > reach + r:
-            continue
+    for (ax, ay, az, bx, by, bz, rad, pvx, pvy, pvz, pm) in push:
         qx, qy, qz = closest_on_seg(b["x"], b["y"], b["z"], ax, ay, az, bx, by, bz)
         dx, dy, dz = b["x"] - qx, b["y"] - qy, b["z"] - qz
         lim = r + rad
         d2 = dx * dx + dy * dy + dz * dz
         if d2 >= lim * lim:
             continue
-        b["hit"] = True
         d = math.sqrt(d2)
         if d < 1e-6:
             nx, ny, nz, d = 0.0, 1.0, 0.0, 0.0
@@ -1003,22 +969,19 @@ def step_ball(b, h, push):
         b["vx"] *= 0.9; b["vz"] *= 0.9
     lim = WORLD_SIZE - 1.0
     if abs(b["x"]) > lim:
-        b["x"] = math.copysign(lim, b["x"]); b["vx"] *= -0.5; b["hit"] = True
+        b["x"] = math.copysign(lim, b["x"]); b["vx"] *= -0.5
     if abs(b["z"]) > lim:
-        b["z"] = math.copysign(lim, b["z"]); b["vz"] *= -0.5; b["hit"] = True
+        b["z"] = math.copysign(lim, b["z"]); b["vz"] *= -0.5
     b["sup"] = supported
 
 
 def pair_collide():
-    free = [b for b in BALLS if not b["holder"] and not b["pinned"]]
-    free.sort(key=lambda q: q["x"])
+    free = [b for b in BALLS if not b["holder"] and not b.get("pinned")]
     n = len(free)
     for i in range(n):
         a = free[i]
         for j in range(i + 1, n):
             c = free[j]
-            if c["x"] - a["x"] > 2.05:                  # sorted by x: nothing further along can touch
-                break
             dx, dy, dz = c["x"] - a["x"], c["y"] - a["y"], c["z"] - a["z"]
             lim = a["r"] + c["r"]
             d2 = dx * dx + dy * dy + dz * dz
@@ -1038,7 +1001,6 @@ def pair_collide():
                 a["vx"] -= j_ * ia * nx; a["vy"] -= j_ * ia * ny; a["vz"] -= j_ * ia * nz
                 c["vx"] += j_ * ic * nx; c["vy"] += j_ * ic * ny; c["vz"] += j_ * ic * nz
             a["asleep"] = False; c["asleep"] = False
-            a["hit"] = True; c["hit"] = True
 
 
 def goal_check(b):
@@ -1067,114 +1029,10 @@ def basket_check(b, px, py, pz, now):
     return False
 
 
-def blast(x, y, z, now):
-    """An explosion at (x,y,z): shove balls, set off nearby bombs and cars (chain reactions)."""
-    for b in BALLS:
-        dx, dy, dz = b["x"] - x, b["y"] - y, b["z"] - z
-        d = math.sqrt(dx * dx + dy * dy + dz * dz)
-        if is_bomb(b) and d < CHAIN_R and not b["boom_at"]:
-            b["boom_at"] = now + 0.12 + d * 0.035                  # ripple outward, not all at once
-            continue
-        if b["holder"] or b["pinned"] or d >= BLAST_R:
-            continue
-        k = 16.0 * (1 - d / BLAST_R)
-        if d > 1e-3:
-            b["vx"] += dx / d * k; b["vz"] += dz / d * k
-        b["vy"] += 4.0 + k * 0.6
-        b["asleep"] = False
-    for c in CARS:
-        if not c["dead"] and not c["boom_at"] and math.hypot(c["x"] - x, c["z"] - z) < CAR_BLAST_R and abs(c["y"] - y) < 4:
-            c["boom_at"] = now + 0.1
-
-
-def wreck_car(c, now):
-    """Mark a car as wrecked: driver freed, it comes back home after CAR_RESPAWN seconds."""
-    c["dead"] = True
-    c["boom_at"] = 0.0
-    c["respawn_at"] = now + CAR_RESPAWN
-    c["v"] = 0.0
-    drv = players.get(c["driver"] or "")
-    if drv:
-        drv["car"] = None
-    c["driver"] = None
-
-
-def launch(b, p, fx, fz, aim, now):
-    """Puts ball b in front of player p and throws it. Basketballs get aim assist toward a hoop."""
-    b["holder"] = None
-    b["pinned"] = False
-    b["asleep"] = False
-    b["idle"] = 0.0
-    b["x"] = p["x"] + fx * 0.7
-    b["z"] = p["z"] + fz * 0.7
-    b["y"] = p["y"] + 2.2
-    b["vx"] = b["vy"] = b["vz"] = 0.0
-    if is_bomb(b):
-        elev = max(-0.5, min(1.3, aim))
-        b["vx"] = fx * math.cos(elev) * BOMB_SPEED
-        b["vz"] = fz * math.cos(elev) * BOMB_SPEED
-        b["vy"] = math.sin(elev) * BOMB_SPEED
-        b["live"] = True
-        b["armed_at"] = now + 0.12
-        b["fuse_at"] = now + BOMB_FUSE
-    elif b["kind"] == "basket":
-        target, best = None, 1e9
-        for hp in HOOPS:
-            dx, dz = hp["x"] - b["x"], hp["z"] - b["z"]
-            dh = math.hypot(dx, dz)
-            if 0.5 < dh < 17 and (dx * fx + dz * fz) / dh > math.cos(math.radians(40)) and dh < best:
-                target, best = hp, dh
-        if target:
-            dh = best
-            sigma = 0.06 + 0.022 * dh                       # far shots miss more often
-            tx = target["x"] + random.gauss(0, sigma)
-            tz = target["z"] + random.gauss(0, sigma)
-            ty = target["y"] + 0.05
-            dx, dy, dz = tx - b["x"], ty - b["y"], tz - b["z"]
-            T = max(0.55, min(1.5, 0.5 + 0.06 * dh))
-            b["vx"] = dx / T * 1.02
-            b["vz"] = dz / T * 1.02
-            b["vy"] = (dy + 0.5 * G * T * T) / T
-        else:
-            elev = max(0.15, min(1.25, aim))
-            b["vx"] = fx * math.cos(elev) * 12.0
-            b["vz"] = fz * math.cos(elev) * 12.0
-            b["vy"] = math.sin(elev) * 12.0
-    else:
-        elev = max(0.15, min(1.25, aim))
-        b["vx"] = fx * math.cos(elev) * 12.0
-        b["vz"] = fz * math.cos(elev) * 12.0
-        b["vy"] = math.sin(elev) * 12.0
-    b["thrower"] = p["name"]
-    b["thrower_id"] = p["id"]
-
-
-def drop_ball(p, fx=0.0, fz=1.0, aim=0.5, thrown=False):
-    """Releases the ball a player holds. thrown=True launches it; a dropped bomb goes off shortly after."""
-    b = ball_by_id(p.get("hold"))
-    p["hold"] = None
-    if not b or b["holder"] != p["id"]:
-        return None
-    now = time.time()
-    l = math.hypot(fx, fz)
-    if l < 1e-6:
-        fx, fz, l = 0.0, 1.0, 1.0
-    fx, fz = fx / l, fz / l
-    if thrown:
-        launch(b, p, fx, fz, aim, now)
-    else:
-        b["holder"] = None
-        b["asleep"] = False
-        b["x"], b["y"], b["z"] = p["x"] + fx * 0.7, p["y"] + 1.2, p["z"] + fz * 0.7
-        b["vx"] = b["vy"] = b["vz"] = 0.0
-    return b
-
-
 def phys_tick(dt, now):
     moved, events = [], []
     push = pushers(now)
     for b in BALLS:
-        b["hit"] = False
         if b["holder"]:
             hp = players.get(b["holder"])
             if hp:
@@ -1183,26 +1041,24 @@ def phys_tick(dt, now):
                 b["holder"] = None
                 b["asleep"] = False
             continue
-        if b["pinned"]:
+        if b.get("pinned"):
             continue
         if b["respawn_at"] and now >= b["respawn_at"]:
             reset_ball(b)
         if b["asleep"] and touching(b, push):
             b["asleep"] = False
         b["px"], b["py"], b["pz"] = b["x"], b["y"], b["z"]
+    bombs_before_step()
     sub = 3
     h = dt / sub
     for _ in range(sub):
         for b in BALLS:
-            if not b["asleep"] and not b["holder"] and not b["pinned"]:
+            if not b["asleep"] and not b["holder"] and not b.get("pinned"):
                 step_ball(b, h, push)
         pair_collide()
     for b in BALLS:
-        if b["holder"] or b["pinned"]:
+        if b["holder"] or b.get("pinned"):
             continue
-        if b["live"] and not b["boom_at"]:                       # thrown bomb: boom on impact, or when the fuse runs out
-            if (b["hit"] and now >= b["armed_at"]) or now >= b["fuse_at"]:
-                b["boom_at"] = now
         if b["asleep"]:
             b["idle"] += dt
             if b["idle"] > 60 and math.hypot(b["x"] - b["hx"], b["z"] - b["hz"]) > 2.0:
@@ -1232,41 +1088,14 @@ def phys_tick(dt, now):
             b["asleep"] = True
         moved.append(b)
         b["dirty"] = False
-    # explosions that are due (bombs and cars); each one can schedule more (chain reactions)
-    gone = []
-    for b in list(BALLS):
-        if is_bomb(b) and b["boom_at"] and now >= b["boom_at"]:
-            BALLS.remove(b)
-            gone.append(b["id"])
-            hp = players.get(b["holder"] or "")
-            if hp and hp.get("hold") == b["id"]:
-                hp["hold"] = None
-            events.append({"t": "boom", "src": "bomb", "x": round(b["x"], 2), "y": round(b["y"], 2), "z": round(b["z"], 2),
-                           "by": b.get("thrower_id")})
-            blast(b["x"], b["y"], b["z"], now)
-    for c in CARS:
-        if not c["dead"] and c["boom_at"] and now >= c["boom_at"]:
-            wreck_car(c, now)
-            events.append({"t": "boom", "src": "car", "id": c["id"], "x": round(c["x"], 2), "y": round(c["y"], 2),
-                           "z": round(c["z"], 2), "by": c.pop("boom_by", None)})
-            events.append({"t": "car", **car_public(c)})
-            blast(c["x"], c["y"], c["z"], now)
-    if gone:
-        moved = [b for b in moved if b["id"] not in gone]
-        events.append({"t": "ball_del", "ids": gone})
     for c in CARS:                                    # wrecked cars come back after CAR_RESPAWN seconds
         if c["dead"] and now >= c["respawn_at"]:
             car_home(c)
             events.append({"t": "car", **car_public(c, snap=True)})
-    for sl in SHOP_SLOTS:                             # bomb shop restocks itself
-        b = ball_by_id(sl["ball"]) if sl["ball"] else None
-        if b is None or not b["pinned"]:
-            sl["ball"] = None
-            if not sl["empty_at"]:
-                sl["empty_at"] = now
-            elif now - sl["empty_at"] >= RESTOCK and sum(1 for x in BALLS if is_bomb(x)) < MAX_BOMBS:
-                nb = stock_slot(sl)
-                events.append({"t": "ball_add", "b": ball_info(nb)})
+    try:
+        moved = bombs_after_step(now, dt, moved, events)
+    except Exception as e:  # noqa  - a bomb problem must never stop the normal physics
+        print("[bombs] error:", e)
     return [[b["id"], round(b["x"], 2), round(b["y"], 2), round(b["z"], 2)] for b in moved], events
 
 
@@ -1293,6 +1122,74 @@ async def physics_loop():
             print("[physics] error:", e)
 
 
+def drop_ball(p, fx=0.0, fz=1.0, aim=0.5, thrown=False):
+    """Releases the ball a player holds. thrown=True launches it (aim-assisted toward a hoop in front)."""
+    b = ball_by_id(p.get("hold"))
+    p["hold"] = None
+    if not b or b["holder"] != p["id"]:
+        return None
+    b["holder"] = None
+    b["asleep"] = False
+    b["idle"] = 0.0
+    l = math.hypot(fx, fz)
+    if l < 1e-6:
+        fx, fz, l = 0.0, 1.0, 1.0
+    fx, fz = fx / l, fz / l
+    b["x"] = p["x"] + fx * 0.7
+    b["z"] = p["z"] + fz * 0.7
+    b["y"] = p["y"] + 2.2
+    b["vx"] = b["vy"] = b["vz"] = 0.0
+    if thrown:
+        target, best = None, 1e9
+        for hp in HOOPS:
+            dx, dz = hp["x"] - b["x"], hp["z"] - b["z"]
+            dh = math.hypot(dx, dz)
+            if 0.5 < dh < 17 and (dx * fx + dz * fz) / dh > math.cos(math.radians(40)) and dh < best:
+                target, best = hp, dh
+        if target:
+            dh = best
+            sigma = 0.06 + 0.022 * dh                       # far shots miss more often
+            tx = target["x"] + random.gauss(0, sigma)
+            tz = target["z"] + random.gauss(0, sigma)
+            ty = target["y"] + 0.05
+            dx, dy, dz = tx - b["x"], ty - b["y"], tz - b["z"]
+            T = max(0.55, min(1.5, 0.5 + 0.06 * dh))
+            b["vx"] = dx / T * 1.02
+            b["vz"] = dz / T * 1.02
+            b["vy"] = (dy + 0.5 * G * T * T) / T
+        else:
+            elev = max(0.15, min(1.25, aim))
+            speed = 12.0
+            b["vx"] = fx * math.cos(elev) * speed
+            b["vz"] = fz * math.cos(elev) * speed
+            b["vy"] = math.sin(elev) * speed
+        b["thrower"] = p["name"]
+        b["thrower_id"] = p["id"]
+    return b
+
+
+def explode_car(c, now):
+    """Wreck a car: balls nearby get blasted, it comes back home after CAR_RESPAWN seconds."""
+    c["dead"] = True
+    c["respawn_at"] = now + CAR_RESPAWN
+    c["v"] = 0.0
+    drv = players.get(c["driver"] or "")
+    if drv:
+        drv["car"] = None
+    c["driver"] = None
+    for b in BALLS:
+        if b["holder"]:
+            continue
+        dx, dy, dz = b["x"] - c["x"], b["y"] - c["y"], b["z"] - c["z"]
+        d = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if d < 9.0:
+            k = 16.0 * (1 - d / 9.0)
+            if d > 1e-3:
+                b["vx"] += dx / d * k; b["vz"] += dz / d * k
+            b["vy"] += 4.0 + k * 0.6
+            b["asleep"] = False
+
+
 async def free_car(p):
     """Release the car a player is driving (exit, disconnect, kick)."""
     cid = p.get("car")
@@ -1310,6 +1207,139 @@ async def release_hold(p):
     b = drop_ball(p)
     if b:
         await broadcast({"t": "hold", "id": b["id"], "by": None})
+
+
+
+# ================================================================ BOMBS (add-on, separate from the ball/car code above)
+BOMB_FUSE = 3.5          # a thrown bomb goes off when it hits something, or after this many seconds
+BOMB_SPEED = 16.0
+BLAST_R = 9.0            # balls get pushed inside this radius
+CHAIN_R = 7.0            # other bombs inside this radius go off too
+CAR_BLAST_R = 4.5        # cars inside this radius blow up too
+MAX_BOMBS = 80
+RESTOCK = 5.0            # seconds before a bomb shop slot refills
+
+
+def is_bomb(b):
+    return b["kind"] == "bomb"
+
+
+def new_id(prefix):
+    global _spawn_n
+    _spawn_n += 1
+    return f"{prefix}{_spawn_n}"
+
+
+def stock_slot(sl):
+    b = make_ball(new_id("b"), "bomb", sl["x"], sl["y"], sl["z"])
+    b["pinned"] = True
+    BALLS.append(b)
+    sl["ball"] = b["id"]
+    sl["empty_at"] = 0.0
+    return b
+
+
+def launch_bomb(b, p, fx, fz, aim, now):
+    """Throw a bomb from player p where they are looking. It arms itself straight away."""
+    l = math.hypot(fx, fz)
+    if l < 1e-6:
+        fx, fz, l = 0.0, 1.0, 1.0
+    fx, fz = fx / l, fz / l
+    elev = max(-0.5, min(1.3, aim))
+    b["holder"] = None
+    b["pinned"] = False
+    b["asleep"] = False
+    b["idle"] = 0.0
+    b["x"], b["y"], b["z"] = p["x"] + fx * 0.7, p["y"] + 2.2, p["z"] + fz * 0.7
+    b["vx"] = fx * math.cos(elev) * BOMB_SPEED
+    b["vz"] = fz * math.cos(elev) * BOMB_SPEED
+    b["vy"] = math.sin(elev) * BOMB_SPEED
+    b["live"] = True
+    b["armed_at"] = now + 0.12
+    b["fuse_at"] = now + BOMB_FUSE
+    b["boom_at"] = 0.0
+    b["thrower"] = p["name"]
+    b["thrower_id"] = p["id"]
+
+
+def blast(x, y, z, now, push_balls=True):
+    """Chain reactions: nearby bombs and cars go off too. Optionally shove balls."""
+    for b in BALLS:
+        dx, dy, dz = b["x"] - x, b["y"] - y, b["z"] - z
+        d = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if is_bomb(b):
+            if d < CHAIN_R and not b.get("boom_at"):
+                b["boom_at"] = now + 0.12 + d * 0.035
+            continue
+        if not push_balls or b["holder"] or d >= BLAST_R:
+            continue
+        k = 16.0 * (1 - d / BLAST_R)
+        if d > 1e-3:
+            b["vx"] += dx / d * k; b["vz"] += dz / d * k
+        b["vy"] += 4.0 + k * 0.6
+        b["asleep"] = False
+    for c in CARS:
+        if not c["dead"] and not c.get("boom_at") and math.hypot(c["x"] - x, c["z"] - z) < CAR_BLAST_R and abs(c["y"] - y) < 4:
+            c["boom_at"] = now + 0.1
+
+
+def bombs_before_step():
+    for b in BALLS:
+        if b.get("live"):
+            b["pv"] = (b["vx"], b["vy"], b["vz"])
+
+
+def bombs_after_step(now, dt, moved, events):
+    # 1) thrown bombs: boom when they hit something (sudden change in speed or touching the ground), or on the fuse
+    for b in BALLS:
+        if not b.get("live") or b.get("boom_at") or b["holder"]:
+            continue
+        hit = False
+        if now >= b["armed_at"]:
+            pvx, pvy, pvz = b.get("pv", (b["vx"], b["vy"], b["vz"]))
+            dv = math.sqrt((b["vx"] - pvx) ** 2 + (b["vy"] - (pvy - G * dt)) ** 2 + (b["vz"] - pvz) ** 2)
+            hit = dv > 2.5 or b["y"] <= b["r"] + 0.05 or b["asleep"]
+        if hit or now >= b["fuse_at"]:
+            b["boom_at"] = now
+    # 2) bombs that are due
+    gone = []
+    for b in list(BALLS):
+        if is_bomb(b) and b.get("boom_at") and now >= b["boom_at"]:
+            BALLS.remove(b)
+            gone.append(b["id"])
+            hp = players.get(b["holder"] or "")
+            if hp and hp.get("hold") == b["id"]:
+                hp["hold"] = None
+            events.append({"t": "boom", "src": "bomb", "x": round(b["x"], 2), "y": round(b["y"], 2), "z": round(b["z"], 2),
+                           "by": b.get("thrower_id")})
+            blast(b["x"], b["y"], b["z"], now)
+    # 3) cars that are due (car-into-car crashes, wall crashes on turbo, caught in a blast)
+    for c in CARS:
+        if not c["dead"] and c.get("boom_at") and now >= c["boom_at"]:
+            c["boom_at"] = 0.0
+            explode_car(c, now)                      # the original car explosion code
+            events.append({"t": "boom", "src": "car", "id": c["id"], "x": round(c["x"], 2), "y": round(c["y"], 2),
+                           "z": round(c["z"], 2), "by": c.pop("boom_by", None)})
+            events.append({"t": "car", **car_public(c)})
+            blast(c["x"], c["y"], c["z"], now, push_balls=False)
+    if gone:
+        events.append({"t": "ball_del", "ids": gone})
+        moved = [b for b in moved if b["id"] not in gone]
+    # 4) the bomb shop refills itself
+    for sl in SHOP_SLOTS:
+        b = ball_by_id(sl["ball"]) if sl["ball"] else None
+        if b is None or not b.get("pinned"):
+            sl["ball"] = None
+            if not sl["empty_at"]:
+                sl["empty_at"] = now
+            elif now - sl["empty_at"] >= RESTOCK and sum(1 for x in BALLS if is_bomb(x)) < MAX_BOMBS:
+                events.append({"t": "ball_add", "b": ball_info(stock_slot(sl))})
+    return moved
+
+
+init_state()
+for _sl in SHOP_SLOTS:
+    stock_slot(_sl)
 
 
 # ---------------------------------------------------------------- websocket
@@ -1492,11 +1522,7 @@ async def ws_handler(request):
                 me["pt"] = now
                 me["x"], me["y"], me["z"] = nx, ny, nz
                 if me["car"]:
-                    if now - me.get("car_t", 0) < 1.5:
-                        continue                 # walking update sent just before getting in: ignore it
-                    # the client only sends walking updates when it is NOT driving -> we were out of sync, let the car go
-                    print(f"[sync] {me['name']} was still marked as driving {me['car']}, freeing it")
-                    await free_car(me)
+                    continue
                 await broadcast({"t": "s", "id": me["id"], "x": me["x"], "y": me["y"], "z": me["z"]}, exclude=me["id"])
             elif t == "emote":
                 try:
@@ -1519,13 +1545,11 @@ async def ws_handler(request):
                     me["char_t"] = now
                     await broadcast({"t": "char", "id": me["id"], "char": new}, exclude=me["id"])
             elif t == "car_enter":
-                if me["car"] and me["car"] != data.get("id"):
-                    await free_car(me)                                   # stale: the client is clearly on foot
                 car = next((c for c in CARS if c["id"] == data.get("id")), None)
                 if (car and car["driver"] is None and not car["dead"] and not me["car"] and abs(car["x"] - me["x"]) < 7
                         and abs(car["z"] - me["z"]) < 7 and abs(car["y"] - me["y"]) < 4):
                     await release_hold(me)
-                    car["driver"] = me["id"]; car["v"] = 0.0; car["t"] = time.time(); me["car"] = car["id"]; me["car_t"] = time.time()
+                    car["driver"] = me["id"]; car["v"] = 0.0; car["t"] = time.time(); me["car"] = car["id"]
                     await broadcast({"t": "car", **car_public(car)})
                 elif car:
                     await send(me, {"t": "car", **car_public(car, snap=True)})     # resync this client
@@ -1533,15 +1557,6 @@ async def ws_handler(request):
                 await free_car(me)
             elif t == "c":
                 car = next((c for c in CARS if c["id"] == me["car"]), None)
-                if not car or car["driver"] != me["id"] or car["dead"]:
-                    cid = data.get("id")
-                    real = next((c for c in CARS if c["driver"] == me["id"]), None)
-                    if not real:
-                        now = time.time()
-                        if now - me.get("resync_t", 0) > 1.0:
-                            me["resync_t"] = now
-                            await send(me, {"t": "not_driving"})
-                    continue
                 if car and car["driver"] == me["id"] and not car["dead"]:
                     car["x"] = num(data.get("x"), -130, 130, car["x"]); car["z"] = num(data.get("z"), -130, 130, car["z"])
                     car["y"] = num(data.get("y"), -5, 60, car["y"]); car["h"] = num(data.get("h"), -1000, 1000, car["h"])
@@ -1550,7 +1565,7 @@ async def ws_handler(request):
                     await broadcast({"t": "c", **car_public(car)}, exclude=me["id"])
             elif t == "car_boom":
                 car = next((c for c in CARS if c["id"] == me["car"]), None)
-                if car and car["driver"] == me["id"] and not car["dead"] and not car["boom_at"]:
+                if car and car["driver"] == me["id"] and not car["dead"] and not car.get("boom_at"):
                     car["boom_at"] = time.time()
                     car["boom_by"] = me["id"]
                     print(f"[boom] {me['name']} wrecked {car['id']}")
@@ -1561,7 +1576,7 @@ async def ws_handler(request):
                         and math.hypot(mine["x"] - other["x"], mine["z"] - other["z"]) < 7):
                     now = time.time()
                     for c in (mine, other):
-                        if not c["boom_at"]:
+                        if not c.get("boom_at"):
                             c["boom_at"] = now
                             c["boom_by"] = me["id"]
                     print(f"[crash] {me['name']} smashed {mine['id']} into {other['id']}")
@@ -1605,11 +1620,13 @@ async def ws_handler(request):
                     me["ab_t"].append(now)
                     l = math.hypot(fx, fz) or 1.0
                     nb = make_ball(new_id("x"), "bomb", me["x"], me["y"] + 2.2, me["z"], spawned=True)
-                    launch(nb, me, fx / l, fz / l, aim, now)
+                    launch_bomb(nb, me, fx / l, fz / l, aim, now)
                     BALLS.append(nb)
                     await broadcast({"t": "ball_add", "b": ball_info(nb)})
                     continue
                 b = drop_ball(me, fx, fz, aim, thrown=True)
+                if b and is_bomb(b):
+                    launch_bomb(b, me, fx, fz, aim, time.time())
                 if b:
                     await broadcast({"t": "hold", "id": b["id"], "by": None})
             elif t == "drop":
