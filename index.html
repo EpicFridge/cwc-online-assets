@@ -1677,7 +1677,7 @@ function toggleSpawnMenu() {
 }
 function refreshSpawnInfo() {
   let n = 0; for (const id of balls.keys()) if (/^s\d+$/.test(id)) n++;
-  $("spawnInfo").textContent = "Spawned: " + n + " / 60";
+  $("spawnInfo").textContent = "Spawned: " + n + " / 100";
 }
 for (const btn of document.querySelectorAll("#spawnMenu [data-kind]")) {
   btn.onclick = () => { if (!me) return; send({ t: "spawn", kind: btn.dataset.kind, fx: +(-Math.sin(yaw)).toFixed(3), fz: +(-Math.cos(yaw)).toFixed(3) }); btn.blur(); };
@@ -1847,6 +1847,10 @@ function handleMsg(m) {
       break;
     }
     case "hit": playSfx("hit", 1, m.x, m.z); break;
+    case "not_driving": {
+      if (me && me.carId) { const c = cars.get(me.carId); me.carId = null; if (c) placeAfterExit(c); me.target.copy(me.pos); me.vy = 0; me.sentPos.set(1e9, 0, 0); }
+      break;
+    }
     case "score": score = m.score; drawScore(); addSys("⚽ The soccer score was reset."); break;
     case "notice": addSys(m.m); break;
     case "goal":
@@ -1876,7 +1880,15 @@ function startGame() {
   ws.onmessage = ev => {
     let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
     if (m.t === "welcome") welcomed = true;
-    handleMsg(m);
+    try { handleMsg(m); }
+    catch (err) {
+      console.error("Error handling server message", m.t, err);
+      const now = performance.now();
+      if (!window.__lastErrShown || now - window.__lastErrShown > 5000) {
+        window.__lastErrShown = now;
+        try { addSys("⚠️ Game error while handling '" + m.t + "': " + (err && err.message)); } catch (_) {}
+      }
+    }
   };
   ws.onclose = () => {
     clearInterval(pingTimer);
@@ -1894,6 +1906,16 @@ let last = performance.now();
 let previewCtx = null;
 function frame(now) {
   requestAnimationFrame(frame);
+  try { frameInner(now); }
+  catch (err) {
+    console.error("Frame error", err);
+    if (inGame && (!window.__lastFrameErr || now - window.__lastFrameErr > 5000)) {
+      window.__lastFrameErr = now;
+      try { addSys("⚠️ Game error: " + (err && err.message) + " (please tell the owner)"); } catch (_) {}
+    }
+  }
+}
+function frameInner(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (!inGame) {
     const t = now * 0.00007;

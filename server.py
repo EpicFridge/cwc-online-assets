@@ -699,7 +699,7 @@ BALL_KINDS = {
 }
 GRABBABLE = {"basket", "bomb", "abomb"}
 SPAWNABLE = {"soccer", "beach", "basket", "bomb", "abomb"}
-MAX_SPAWNED = 60
+MAX_SPAWNED = 100
 BALL_DEFS = [
     {"id": "soccer", "kind": "soccer", "x": PITCH["cx"], "z": PITCH["cz"]},
     {"id": "beach1", "kind": "beach", "x": 3.0, "z": 14.0},
@@ -1492,7 +1492,11 @@ async def ws_handler(request):
                 me["pt"] = now
                 me["x"], me["y"], me["z"] = nx, ny, nz
                 if me["car"]:
-                    continue
+                    if now - me.get("car_t", 0) < 1.5:
+                        continue                 # walking update sent just before getting in: ignore it
+                    # the client only sends walking updates when it is NOT driving -> we were out of sync, let the car go
+                    print(f"[sync] {me['name']} was still marked as driving {me['car']}, freeing it")
+                    await free_car(me)
                 await broadcast({"t": "s", "id": me["id"], "x": me["x"], "y": me["y"], "z": me["z"]}, exclude=me["id"])
             elif t == "emote":
                 try:
@@ -1515,11 +1519,13 @@ async def ws_handler(request):
                     me["char_t"] = now
                     await broadcast({"t": "char", "id": me["id"], "char": new}, exclude=me["id"])
             elif t == "car_enter":
+                if me["car"] and me["car"] != data.get("id"):
+                    await free_car(me)                                   # stale: the client is clearly on foot
                 car = next((c for c in CARS if c["id"] == data.get("id")), None)
                 if (car and car["driver"] is None and not car["dead"] and not me["car"] and abs(car["x"] - me["x"]) < 7
                         and abs(car["z"] - me["z"]) < 7 and abs(car["y"] - me["y"]) < 4):
                     await release_hold(me)
-                    car["driver"] = me["id"]; car["v"] = 0.0; car["t"] = time.time(); me["car"] = car["id"]
+                    car["driver"] = me["id"]; car["v"] = 0.0; car["t"] = time.time(); me["car"] = car["id"]; me["car_t"] = time.time()
                     await broadcast({"t": "car", **car_public(car)})
                 elif car:
                     await send(me, {"t": "car", **car_public(car, snap=True)})     # resync this client
@@ -1527,6 +1533,15 @@ async def ws_handler(request):
                 await free_car(me)
             elif t == "c":
                 car = next((c for c in CARS if c["id"] == me["car"]), None)
+                if not car or car["driver"] != me["id"] or car["dead"]:
+                    cid = data.get("id")
+                    real = next((c for c in CARS if c["driver"] == me["id"]), None)
+                    if not real:
+                        now = time.time()
+                        if now - me.get("resync_t", 0) > 1.0:
+                            me["resync_t"] = now
+                            await send(me, {"t": "not_driving"})
+                    continue
                 if car and car["driver"] == me["id"] and not car["dead"]:
                     car["x"] = num(data.get("x"), -130, 130, car["x"]); car["z"] = num(data.get("z"), -130, 130, car["z"])
                     car["y"] = num(data.get("y"), -5, 60, car["y"]); car["h"] = num(data.get("h"), -1000, 1000, car["h"])
