@@ -271,7 +271,7 @@ function loadCharacter(info) {
     }
     const sd = new spine.SkeletonBinary(new spine.AtlasAttachmentLoader(got.atlas)).readSkeletonData(got.bin);
     const stateData = new spine.AnimationStateData(sd);
-    stateData.defaultMix = 0.1;
+    stateData.defaultMix = 0;      // no blending: animations cut instantly
     const anims = {};
     sd.animations.forEach(a => anims[a.name] = a);
     const firstAnim = sd.animations[0] && sd.animations[0].name;
@@ -637,8 +637,6 @@ function createPlayer(info, isMe) {
     carId: null, tired: !!info.tired, sc: 1, vis: new T.Vector3(info.x, info.y, info.z),
     bubbleUntil: 0, vy: 0, grounded: false, coyote: 0, lastSend: 0, sentPos: new T.Vector3(1e9, 0, 0),
   };
-  const sh = new T.Mesh(new T.CircleGeometry(0.5, 20), new T.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3, depthWrite: false }));
-  sh.rotation.x = -Math.PI / 2; scene.add(sh); pl.shadow = sh;
   makeTag(pl);
   if (info.owner) pl.nameEl.classList.add("owner");
   players.set(pl.id, pl);
@@ -665,7 +663,6 @@ function removePlayer(id) {
   const pl = players.get(id); if (!pl) return;
   players.delete(id);
   if (pl.group) { scene.remove(pl.group); pl.mesh.geometry.dispose(); pl.mesh.material.dispose(); pl.tex.dispose(); }
-  scene.remove(pl.shadow); pl.shadow.geometry.dispose(); pl.shadow.material.dispose();
   pl.tagEl.remove();
 }
 
@@ -905,11 +902,6 @@ function updateVisuals(dt, time) {
     const car = pl.carId ? cars.get(pl.carId) : null;
     if (car) { pl.vis.set(car.x, car.y + 0.45, car.z); pl.sc = 0.55; } else { pl.vis.copy(pl.pos); pl.sc = 1; }
     if (pl.puppet) { pl.puppet.running = car ? false : pl.running; pl.puppet.setMoving(car ? false : pl.moving); pl.puppet.update(dt); }
-    const gy = groundHeightAt(pl.pos.x, pl.pos.y, pl.pos.z);
-    pl.shadow.visible = !car;
-    pl.shadow.position.set(pl.pos.x, gy + 0.03, pl.pos.z);
-    const hgt = Math.max(0, pl.pos.y - gy);
-    pl.shadow.material.opacity = 0.32 * (1 - Math.min(hgt / 7, 0.75));
     const hide = pl.isMe && camMode === "first";
     if (!pl.group) continue;
     pl.group.position.copy(pl.vis);
