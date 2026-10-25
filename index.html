@@ -155,7 +155,11 @@ const status = t => { lobbyStatus.textContent = t; };
 /* ------------------------------------------------------------ constants */
 const TOUCH = ("ontouchstart" in window) || navigator.maxTouchPoints > 0 || (window.matchMedia && matchMedia("(pointer:coarse)").matches);
 if (TOUCH) document.body.classList.add("touch");
-const CHAR_H = 2.0;        // world height of a cookie
+const CHAR_H = 2.0;        // fallback height (before a cookie has loaded)
+// ONE shared scale for every cookie, so tall cookies stay tall and small ones stay small.
+// 0.01 = 100 spine units per world unit (a cookie ~200 spine units tall is ~2 world units).
+// Too small/big overall? Change this number, or test live by opening the page with ?scale=0.012
+const SPINE_UNIT = Math.min(0.1, Math.max(0.001, parseFloat(new URLSearchParams(location.search).get("scale")) || 0.01));
 const TEX = 384;           // per-player sprite texture size
 const MOVE_SPEED = 6, RUN_SPEED = 10, RUN_ANIM = 1.3, JUMP_V = 9, GRAV = 25;
 const RADIUS = 0.35, BODY_H = 1.8;
@@ -285,12 +289,13 @@ function loadCharacter(info) {
       u.x0 = Math.min(u.x0, b.x0); u.y0 = Math.min(u.y0, b.y0); u.x1 = Math.max(u.x1, b.x1); u.y1 = Math.max(u.y1, b.y1);
     }
     const idleH = Math.max(idleB.y1 - idleB.y0, 1);
-    const ws_ = CHAR_H / idleH;                         // spine units -> world units
+    const ws_ = SPINE_UNIT;                             // same spine units -> world units for every cookie
+    console.log("[cookie] " + info.name + ": idle height " + idleH.toFixed(0) + " spine units = " + (idleH * ws_).toFixed(2) + " world units");
     const side = Math.max(u.x1 - u.x0, u.y1 - u.y0) * 1.08;
     const cx = (u.x0 + u.x1) / 2, cy = (u.y0 + u.y1) / 2;
     const idleCx = (idleB.x0 + idleB.x1) / 2;
     return {
-      name: info.name, sd, stateData, anims, idleName,
+      name: info.name, sd, stateData, anims, idleName, height: idleH * ws_,
       side, cx, cy,
       planeSize: side * ws_,
       offX: (cx - idleCx) * ws_,
@@ -878,12 +883,13 @@ function clampPitch() {
 function toggleCamera() { camMode = camMode === "third" ? "first" : "third"; clampPitch(); }
 function updateCamera() {
   const p = me.pos;
+  const mh = (me.charData && me.charData.height) || CHAR_H;     // this cookie's real height
   if (camMode === "third") {
-    const tx = p.x, ty = p.y + 1.1, tz = p.z, cp = Math.cos(pitch);
+    const tx = p.x, ty = p.y + Math.max(0.6, mh * 0.55), tz = p.z, cp = Math.cos(pitch);
     camera.position.set(tx + Math.sin(yaw) * cp * camDist, Math.max(0.3, ty + Math.sin(pitch) * camDist), tz + Math.cos(yaw) * cp * camDist);
     camera.lookAt(tx, ty, tz);
   } else {
-    const hy = p.y + CHAR_H * 0.85, cp = Math.cos(pitch);
+    const hy = p.y + mh * 0.85, cp = Math.cos(pitch);
     camera.position.set(p.x, hy, p.z);
     camera.lookAt(p.x - Math.sin(yaw) * cp, hy - Math.sin(pitch), p.z - Math.cos(yaw) * cp);
   }
@@ -924,7 +930,7 @@ function updateOverlays(time) {
   const v = new T.Vector3();
   for (const pl of players.values()) {
     const hidden = pl.isMe && camMode === "first";
-    v.set(pl.vis.x, pl.vis.y + CHAR_H * pl.sc + 0.25, pl.vis.z);
+    v.set(pl.vis.x, pl.vis.y + ((pl.charData && pl.charData.height) || CHAR_H) * pl.sc + 0.25, pl.vis.z);
     const d = camera.position.distanceTo(v);
     v.project(camera);
     const showBubble = opts.bubbles && time < pl.bubbleUntil;

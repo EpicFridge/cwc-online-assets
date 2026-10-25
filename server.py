@@ -1,7 +1,6 @@
 """
 Witch's Castle Multiplayer server
 - Serves index.html
-- Knows which characters exist (one per .skel) by reading, in this order:
     1. a local ./cookies folder (if you have one)
     2. your GitHub repo (the character files are hosted there with GitHub Pages)
     3. ./characters.txt (one name per line)  -> manual fallback
@@ -26,6 +25,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 LOCAL_DIR = os.path.join(BASE, "cookies")             # optional local copy of the character files
 CHAR_TXT = os.path.join(BASE, "characters.txt")
 CHAR_CACHE_FILE = os.path.join(BASE, "characters_cache.json")
+- Knows which characters exist (one per .skel) by reading, in this order:
 VENDOR_DIR = os.path.join(BASE, "vendor")
 PORT = int(os.environ.get("PORT", "8080"))
 # Where the character files (.skel/.atlas/.png) are hosted (GitHub Pages). The browser downloads them from there.
