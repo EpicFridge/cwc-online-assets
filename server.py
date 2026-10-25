@@ -25,7 +25,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 LOCAL_DIR = os.path.join(BASE, "cookies")             # optional local copy of the character files
 CHAR_TXT = os.path.join(BASE, "characters.txt")
 CHAR_CACHE_FILE = os.path.join(BASE, "characters_cache.json")
-- Knows which characters exist (one per .skel) by reading, in this order:
+# Knows which characters exist (one per .skel) by reading, in this order:
 VENDOR_DIR = os.path.join(BASE, "vendor")
 PORT = int(os.environ.get("PORT", "8080"))
 # Where the character files (.skel/.atlas/.png) are hosted (GitHub Pages). The browser downloads them from there.
