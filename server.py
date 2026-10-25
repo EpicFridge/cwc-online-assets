@@ -740,6 +740,19 @@ def world_json():
 JELLY_COUNT = 50
 AABBS = [(b["x"] - b["w"] / 2, b["x"] + b["w"] / 2, b["top"] - min(b["thick"], b["top"]), b["top"],
           b["z"] - b["d"] / 2, b["z"] + b["d"] / 2) for b in BOXES]
+GRID_CELL = 6.0
+GRID = {}
+for _bx in AABBS:
+    _m = 1.1                                           # biggest ball radius + a little
+    for _gx in range(int(math.floor((_bx[0] - _m) / GRID_CELL)), int(math.floor((_bx[1] + _m) / GRID_CELL)) + 1):
+        for _gz in range(int(math.floor((_bx[4] - _m) / GRID_CELL)), int(math.floor((_bx[5] + _m) / GRID_CELL)) + 1):
+            GRID.setdefault((_gx, _gz), []).append(_bx)
+
+
+def boxes_near(x, z):
+    return GRID.get((int(math.floor(x / GRID_CELL)), int(math.floor(z / GRID_CELL))), ())
+
+
 TOPPABLE = [b for b in BOXES if b["w"] >= 1.6 and b["d"] >= 1.6 and b["top"] <= 8.6
             and not b.get("kind") and not b.get("hidden") and not b.get("nojelly")]
 
@@ -870,13 +883,13 @@ def pushers(now):
         stale = now - p["pt"] > 0.3
         vx = 0.0 if stale else p["vx"]
         vz = 0.0 if stale else p["vz"]
-        out.append((p["x"], p["y"] + 0.4, p["z"], p["x"], p["y"] + 1.4, p["z"], 0.4, vx, 0.0, vz, 70.0))
+        out.append((p["x"], p["y"] + 0.4, p["z"], p["x"], p["y"] + 1.4, p["z"], 0.4, vx, 0.0, vz, 70.0, p["x"], p["z"], 0.5))
     for c in CARS:
         if c["dead"]:
             continue
         fx, fz = math.sin(c["h"]), math.cos(c["h"])
         v = c["v"] if (c["driver"] and now - c["t"] < 0.4) else 0.0
-        out.append((c["x"] + fx, c["y"] + 0.6, c["z"] + fz, c["x"] - fx, c["y"] + 0.6, c["z"] - fz, 1.0, fx * v, 0.0, fz * v, 900.0))
+        out.append((c["x"] + fx, c["y"] + 0.6, c["z"] + fz, c["x"] - fx, c["y"] + 0.6, c["z"] - fz, 1.0, fx * v, 0.0, fz * v, 900.0, c["x"], c["z"], 2.1))
     return out
 
 
@@ -925,8 +938,8 @@ def step_ball(b, h, push):
             if abs(b["vy"]) < 1.5:
                 b["vy"] = 0.0
         supported = True
-    # static boxes
-    for (x0, x1, y0, y1, z0, z1) in AABBS:
+    # static boxes (only the ones near this ball)
+    for (x0, x1, y0, y1, z0, z1) in boxes_near(b["x"], b["z"]):
         if b["x"] < x0 - r or b["x"] > x1 + r or b["y"] < y0 - r or b["y"] > y1 + r or b["z"] < z0 - r or b["z"] > z1 + r:
             continue
         cx = min(max(b["x"], x0), x1); cy = min(max(b["y"], y0), y1); cz = min(max(b["z"], z0), z1)
@@ -960,7 +973,9 @@ def step_ball(b, h, push):
                     b["hit"] = True
             break
     # players / cars
-    for (ax, ay, az, bx, by, bz, rad, pvx, pvy, pvz, pm) in push:
+    for (ax, ay, az, bx, by, bz, rad, pvx, pvy, pvz, pm, mx, mz, reach) in push:
+        if abs(b["x"] - mx) > reach + r or abs(b["z"] - mz) > reach + r:
+            continue
         qx, qy, qz = closest_on_seg(b["x"], b["y"], b["z"], ax, ay, az, bx, by, bz)
         dx, dy, dz = b["x"] - qx, b["y"] - qy, b["z"] - qz
         lim = r + rad
@@ -996,11 +1011,14 @@ def step_ball(b, h, push):
 
 def pair_collide():
     free = [b for b in BALLS if not b["holder"] and not b["pinned"]]
+    free.sort(key=lambda q: q["x"])
     n = len(free)
     for i in range(n):
         a = free[i]
         for j in range(i + 1, n):
             c = free[j]
+            if c["x"] - a["x"] > 2.05:                  # sorted by x: nothing further along can touch
+                break
             dx, dy, dz = c["x"] - a["x"], c["y"] - a["y"], c["z"] - a["z"]
             lim = a["r"] + c["r"]
             d2 = dx * dx + dy * dy + dz * dz
@@ -1149,10 +1167,6 @@ def drop_ball(p, fx=0.0, fz=1.0, aim=0.5, thrown=False):
         b["asleep"] = False
         b["x"], b["y"], b["z"] = p["x"] + fx * 0.7, p["y"] + 1.2, p["z"] + fz * 0.7
         b["vx"] = b["vy"] = b["vz"] = 0.0
-        if is_bomb(b):
-            b["live"] = True
-            b["armed_at"] = now + 0.6
-            b["fuse_at"] = now + 2.0
     return b
 
 
@@ -1583,6 +1597,8 @@ async def ws_handler(request):
                 b = drop_ball(me, fx, fz, aim, thrown=True)
                 if b:
                     await broadcast({"t": "hold", "id": b["id"], "by": None})
+            elif t == "drop":
+                await release_hold(me)
             elif t == "spawn" and me["owner"]:
                 kind = data.get("kind")
                 now = time.time()

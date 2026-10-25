@@ -1397,7 +1397,11 @@ function interact() {
     send({ t: "car_exit" });
     return;
   }
-  if (me.holdId) { throwBall(); return; }
+  if (me.holdId) {
+    const nc = nearestFreeCar();
+    if (nc && Math.hypot(nc.x - me.pos.x, nc.z - me.pos.z) < 3.4) { send({ t: "car_enter", id: nc.id }); return; }   // right next to a car: get in
+    throwBall(); return;
+  }
   const b = nearestGrabbable(); if (b) { send({ t: "grab", id: b.id }); return; }
   const c = nearestFreeCar(); if (c) send({ t: "car_enter", id: c.id });
 }
@@ -1406,11 +1410,13 @@ function updatePrompt() {
   let txt = "";
   if (me && !typing) {
     if (me.carId) txt = TOUCH ? "Tap E to exit the car" : "E - Exit car   (W/S drive · A/D steer · SPACE brake · SHIFT turbo — crash hard on turbo and it might blow up!)";
-    else if (me.holdId) {
+    else if (me.holdId && nearestFreeCar() && Math.hypot(nearestFreeCar().x - me.pos.x, nearestFreeCar().z - me.pos.z) < 3.4) {
+      txt = TOUCH ? "Tap E to drive (you'll put down what you're holding)" : "E - Drive car (puts down what you're holding)";
+    } else if (me.holdId) {
       const hk = (balls.get(me.holdId) || {}).kind;
-      if (hk === "basket") txt = TOUCH ? "Tap E to throw (face a hoop to shoot)" : "E - Throw ball (face a hoop to shoot)";
-      else if (hk === "abomb") txt = TOUCH ? "Tap E to throw a bomb (you keep the admin bomb)" : "E - Throw a bomb where you look (hold E to spam, you keep the admin bomb)";
-      else txt = TOUCH ? "Tap E to throw the bomb" : "E - Throw bomb where you look";
+      if (hk === "basket") txt = TOUCH ? "Tap E to throw (face a hoop to shoot)" : "E - Throw ball (face a hoop to shoot) | Q - Drop";
+      else if (hk === "abomb") txt = TOUCH ? "Tap E to throw a bomb (you keep the admin bomb)" : "E - Throw a bomb where you look (hold E to spam) | Q - Drop";
+      else txt = TOUCH ? "Tap E to throw the bomb" : "E - Throw bomb where you look | Q - Drop";
     } else {
       const gb = nearestGrabbable();
       if (gb) txt = (TOUCH ? "Tap E to grab the " : "E - Grab ") + (gb.kind === "basket" ? "ball" : gb.kind === "abomb" ? "admin bomb" : "bomb");
@@ -1614,6 +1620,7 @@ window.addEventListener("keydown", e => {
   else if (e.code === "KeyO") { if (isOwner) toggleSpawnMenu(); else toggleChat(); }
   else if (e.code === "KeyI" && isOwner) toggleAdmin();
   else if (e.code === "KeyE") interact();
+  else if (e.code === "KeyQ" && me && me.holdId) send({ t: "drop" });
   else if (e.code === "KeyV") toggleCamera();
   else {
     const m = /^(?:Digit|Numpad)([1-9])$/.exec(e.code);
