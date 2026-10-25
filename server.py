@@ -809,6 +809,14 @@ async def ws_handler(request):
                     me["tired"] = bool(data.get("on"))
                     msg["on"] = me["tired"]
                 await broadcast(msg, exclude=me["id"])
+            elif t == "char":
+                new = data.get("char")
+                now = time.time()
+                if (isinstance(new, str) and NAME_RE.match(new) and (not CHAR_SET or new in CHAR_SET)
+                        and new != me["char"] and now - me.get("char_t", 0) > 1.5):
+                    me["char"] = new
+                    me["char_t"] = now
+                    await broadcast({"t": "char", "id": me["id"], "char": new}, exclude=me["id"])
             elif t == "car_enter":
                 car = next((c for c in CARS if c["id"] == data.get("id")), None)
                 if (car and car["driver"] is None and not me["car"] and abs(car["x"] - me["x"]) < 7
